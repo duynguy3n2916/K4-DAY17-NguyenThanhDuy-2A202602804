@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from model_provider import ProviderConfig
+from dotenv import load_dotenv
+
+from model_provider import ProviderConfig, normalize_provider
 
 
 @dataclass
@@ -49,4 +52,53 @@ def load_config(base_dir: Path | None = None) -> LabConfig:
     # TODO: create `root / "state"`.
     # TODO: choose sensible defaults for compact memory.
 
-    raise NotImplementedError("Students should implement load_config().")
+    load_dotenv(root / ".env")
+    state_dir = root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    model_defaults = {
+        "openai": "gpt-4o-mini",
+        "custom": "custom-model",
+        "gemini": "gemini-2.0-flash",
+        "anthropic": "claude-3-5-haiku-latest",
+        "ollama": "llama3.2",
+        "openrouter": "openai/gpt-4o-mini",
+    }
+    key_env = {
+        "openai": "OPENAI_API_KEY",
+        "custom": "CUSTOM_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+    }
+    url_env = {"custom": "CUSTOM_BASE_URL", "ollama": "OLLAMA_BASE_URL"}
+
+    def provider_config(prefix: str, fallback_provider: str | None = None) -> ProviderConfig:
+        provider = normalize_provider(os.getenv(f"{prefix}_PROVIDER", fallback_provider or "openai"))
+        default_model = model_defaults[provider]
+        if prefix == "JUDGE" and provider == model.provider:
+            default_model = model.model_name
+        return ProviderConfig(
+            provider=provider,
+            model_name=os.getenv(f"{prefix}_MODEL", default_model),
+            temperature=float(os.getenv(f"{prefix}_TEMPERATURE", "0")),
+            api_key=os.getenv(key_env[provider]) if provider in key_env else None,
+            base_url=os.getenv(url_env[provider]) if provider in url_env else None,
+        )
+
+    model = provider_config("LLM")
+    judge_model = provider_config("JUDGE", model.provider)
+    compact_threshold_tokens = int(os.getenv("COMPACT_THRESHOLD_TOKENS", "1200"))
+    compact_keep_messages = int(os.getenv("COMPACT_KEEP_MESSAGES", "4"))
+    if compact_threshold_tokens <= 0 or compact_keep_messages < 1:
+        raise ValueError("Compact threshold must be positive and keep_messages >= 1")
+
+    return LabConfig(
+        base_dir=root,
+        data_dir=root / "data",
+        state_dir=state_dir,
+        compact_threshold_tokens=compact_threshold_tokens,
+        compact_keep_messages=compact_keep_messages,
+        model=model,
+        judge_model=judge_model,
+    )
